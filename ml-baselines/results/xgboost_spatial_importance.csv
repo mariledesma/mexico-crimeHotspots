@@ -1,0 +1,13 @@
+feature,importance
+rolling_6_month,0.54494536
+rolling_3_month,0.3017455
+total_crime,0.03193255
+lag_3,0.024021914
+neighbor_sum,0.019776711
+neighbor_lag_1,0.0136722205
+lag_1,0.013415703
+neighbor_mean,0.0117091425
+month_sin,0.011654687
+year,0.011255646
+month_cos,0.010201546
+neighbor_count,0.0056690075

@@ -1,0 +1,9 @@
+feature,importance
+rolling_6_month,0.68663925
+rolling_3_month,0.2284691
+total_crime,0.01834042
+lag_3,0.015526492
+month_sin,0.014999774
+year,0.013651644
+month_cos,0.013205919
+lag_1,0.009167322

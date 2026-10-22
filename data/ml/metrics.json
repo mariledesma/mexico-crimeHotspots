@@ -1,0 +1,18 @@
+{
+  "last_complete_month": "2026-08",
+  "train_rows": 69454,
+  "test_rows": 5082,
+  "first_test_target_month": "2026-03",
+  "incomplete_panel_rows": 0,
+  "latest_prediction_rows": 847,
+  "metrics": {
+    "persistence": {
+      "mae": 1.4110586383313657,
+      "rmse": 2.022648230373521
+    },
+    "rolling_average": {
+      "mae": 1.2209759937032665,
+      "rmse": 1.673676717809987
+    }
+  }
+}

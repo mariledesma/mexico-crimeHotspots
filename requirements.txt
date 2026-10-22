@@ -1,0 +1,12 @@
+requests
+numpy<2
+pandas
+geopandas
+shapely
+sqlalchemy
+psycopg[binary]
+geoalchemy2
+python-dotenv
+scikit-learn
+xgboost
+torch==2.2.2
