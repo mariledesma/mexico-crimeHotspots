@@ -96,8 +96,24 @@ These results evaluate a sequence of one-month-ahead predictions for the same cu
 
 The data reflects recorded crime and may be affected by reporting and enforcement patterns. Predictions should not be interpreted as individual risk or used alone to make policing decisions.
 
-Possible extensions include verified policy/law variables, additional chronological evaluation periods, hotspot classification, deep spatiotemporal models, and an interactive map. Those features are not part of the current implementation.
+Possible extensions include verified policy/law variables, additional chronological evaluation periods, hotspot classification, deep spatiotemporal models, and public dashboard hosting. Those features are not part of the current implementation.
 
 ## Data attribution
 
 Data is provided by [HoyoDeCrimen](https://api.hoyodecrimen.com/) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See the [API documentation](https://hoyodecrimen.com/api/) for source details.
+
+## Interactive dashboard
+
+The React dashboard uses FastAPI and the existing PostgreSQL/PostGIS database to display saved test predictions. Explore the cuadrante map, change the target month or model, compare actual counts with predictions, and download selected results. Presentation view and Print / PDF support live demonstrations and slide preparation.
+
+From the project root, run:
+
+```sh
+sh dashboard/start.sh
+```
+
+Then open http://127.0.0.1:8000. This is a local dashboard, not a public share link. See [dashboard setup and usage](dashboard/README.md) for details.
+
+## Street analysis pilot
+
+The [Centro street analysis](street-analysis/README.md) adds recorded incident locations, KDE hotspot and change maps, Lecture 14 colocation mining, and forecasts by street segment. Run `sh dashboard/start.sh`, then open http://127.0.0.1:8000/streets or select **Street analysis** in the existing dashboard. The Centro pilot and citywide cuadrante results use separate data and evaluation tables.

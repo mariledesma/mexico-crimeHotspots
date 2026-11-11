@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .DS_Store
 *.joblib
+
+# Reproducible local street pilot snapshots and build scratch
+/data/street/raw/
+/data/street/processed/
+/work/
