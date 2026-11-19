@@ -134,3 +134,18 @@ def places():
     with connection() as c:
         s=current(c);r=c.execute('SELECT category,name,ST_X(geometry) lon,ST_Y(geometry) lat FROM street_context_places WHERE study_id=%s',(s['study_id'],)).fetchall()
     return fc([point(x,{'category':x['category'],'name':x['name']}) for x in r])
+
+
+@router.get('/population')
+def population(year:int=Query(...,ge=2015,le=2030)):
+    with connection() as c:
+        study=current(c)
+        metadata=study['metrics'].get('population')
+        if not metadata:
+            raise HTTPException(404,'Population context has not been prepared and published')
+        if year not in metadata['years']:
+            raise HTTPException(422,'Select a year in the saved population snapshot')
+        rows=c.execute('SELECT segment_id,population_200m,population_density_200m,population_change_pct FROM street_population WHERE study_id=%s AND year=%s ORDER BY segment_id',(study['study_id'],year)).fetchall()
+    return {'year':year,'rows':rows,'unit':'estimated residents per km² within 200 m',
+            'scale':metadata['density_scale'],
+            'interpretation':metadata['interpretation']}

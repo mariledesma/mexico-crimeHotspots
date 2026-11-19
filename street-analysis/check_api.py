@@ -23,3 +23,14 @@ h=fetch('/api/street/history/'+r['rows'][0]['segment_id'],model='xgb_kde');asser
 assert len(fetch('/api/summary')['areas'])==847
 assert len(fetch('/api/street/places')['features'])==a['places']
 print(f'PASS: point filters, fixed KDE/change scales, counts, exact/grid patterns, contextual random-label test, {a["segments"]} predictions, history, and original dashboard.')
+
+if m.get('population'):
+    for year in [m['population']['years'][0],m['population']['years'][-1]]:
+        population=fetch('/api/street/population',year=year)
+        assert len(population['rows'])==a['segments']
+        assert all(r['population_200m']>=0 and r['population_density_200m']>=0 for r in population['rows'])
+    for name in ['rf_kde','rf_population','xgb_population']:
+        prediction=fetch('/api/street/predictions',month=last,model=name)
+        assert len(prediction['rows'])==a['segments'] and all(r['predicted']>=0 for r in prediction['rows'])
+    assert sum(g['xgb_kde']['rows'] for g in m['population']['density_groups'].values())==m['aggregate']['xgb_kde']['rows']
+    print('PASS: WorldPop population coverage, new model predictions, and density group counts.')

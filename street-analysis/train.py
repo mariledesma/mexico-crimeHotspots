@@ -1,7 +1,7 @@
 """Walk-forward experiments on matched segment-month counts (CPU)."""
 from itertools import combinations
 from pathlib import Path
-import json,math
+import argparse,hashlib,json,math
 import numpy as np
 import pandas as pd
 from shapely.geometry import shape
@@ -81,11 +81,41 @@ def subsets(kde,patterns):
 def rank(metrics):
     return (-(metrics['capture_top_10pct'] or 0),metrics['mae'])
 
+def add_population(panel, audit):
+    manifest=json.loads((OUT/'population.json').read_text())
+    if manifest['study_id'] != audit['study_id']:
+        raise ValueError('Population features belong to another study')
+    for filename, key in [('segments.geojson','segments_sha256'),('population_features.csv','features_sha256')]:
+        if hashlib.sha256((OUT/filename).read_bytes()).hexdigest() != manifest[key]:
+            raise ValueError('Population features or street geometry changed; rerun population.py')
+    population=pd.read_csv(OUT/'population_features.csv')
+    if population.duplicated(['segment_id','population_year']).any():
+        raise ValueError('Duplicate population rows')
+    p=panel.assign(population_year=panel.month.dt.year).merge(population,on=['segment_id','population_year'],how='left',validate='many_to_one')
+    required=['population_200m','population_density_200m']
+    if p[required].isna().any().any() or not np.isfinite(p[required]).all().all():
+        raise ValueError('Population data does not cover every street and origin year')
+    p['population_change_defined']=p.population_change_pct.notna().astype(int)
+    p['population_change_pct']=p.population_change_pct.fillna(0)
+    return p, manifest
+
+
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--population',action='store_true',help='Include explicitly retrospective WorldPop comparisons')
+    args=parser.parse_args()
+    models=dict(MODELS)
+    if args.population:
+        models.update({'rf_kde':'Random Forest · + KDE',
+                       'rf_population':'Random Forest · + KDE and population (retrospective)',
+                       'xgb_population':'XGBoost · + KDE and population (retrospective)'})
     audit=json.loads((OUT/'audit.json').read_text());geo=json.loads((OUT/'segments.geojson').read_text());e=pd.read_csv(OUT/'events.csv',keep_default_na=False);months=audit['months']
     if len(months)<34:raise ValueError('Need at least 34 complete months for these three walk-forward folds')
     if set(months)-set(e.month):raise ValueError('Missing source months; do not fill a source outage with zeros')
-    p=build_panel(e,geo,months);p.to_csv(OUT/'segment_features.csv',index=False);eligible=p[p.mean_6.notna()].copy()
+    p=build_panel(e,geo,months)
+    population_manifest=None
+    if args.population:p,population_manifest=add_population(p,audit)
+    p.to_csv(OUT/'segment_features.csv',index=False);eligible=p[p.mean_6.notna()].copy()
     reports=[];all_preds=[]
     for fold in range(3):
         split=len(months)-18+fold*6;val_start=pd.Timestamp(months[split-4]);test_start=pd.Timestamp(months[split]);test_end=pd.Timestamp(months[split+5]);latest_train_origin=val_start-pd.offsets.MonthBegin(1)
@@ -93,24 +123,40 @@ def main():
         tr=panel[panel.target_month<val_start];val=panel[(panel.target_month>=val_start)&(panel.target_month<test_start)];test=panel[(panel.target_month>=test_start)&(panel.target_month<=test_end)];fit=panel[panel.target_month<test_start]
         assert tr.target_month.max()<=val.month.min() and fit.target_month.max()<=test.month.min()
         bw=min(BANDWIDTHS,key=lambda b:rank(score(val,val[f'kde_alloc_{b}'].to_numpy())))
-        fx=subsets(f'kde_{bw}',extra);preds={};valid={};fitted={}
+        fx=subsets(f'kde_{bw}',extra)
+        if args.population:
+            population_columns=['population_200m','population_density_200m','population_change_pct','population_change_defined']
+            fx['rf_kde']=NEAR+[f'kde_{bw}']
+            fx.update({name:NEAR+[f'kde_{bw}']+population_columns for name in ['rf_population','xgb_population']})
+        preds={};valid={};fitted={}
         for name,col in [('zero',None),('persistence','count'),('rolling','mean_3'),('kde',f'kde_alloc_{bw}')]:
             f=lambda d: d[col].to_numpy() if col else np.zeros(len(d));preds[name]=f(test);valid[name]=score(val,f(val))
         for name,cols in fx.items():
             model=estimator(name);model.fit(tr[cols],tr.target);valid[name]=score(val,model.predict(val[cols]));model.fit(fit[cols],fit.target);preds[name]=model.predict(test[cols]);fitted[name]=model
         result=test[['segment_id','month','target_month','target']].rename(columns={'target':'actual'}).copy();result['fold']=fold+1;result['kind']='held_out';result=result.assign(**preds);all_preds.append(result)
-        selected=min(valid,key=lambda n:rank(valid[n]));reports.append({'fold':fold+1,'train_target_end':str(tr.target_month.max().date()),'validation_target_start':str(val_start.date()),'validation_target_end':str(val.target_month.max().date()),'test_target_start':str(test_start.date()),'test_target_end':str(test_end.date()),'kde_bandwidth_m':bw,'training_selected_pairs':[list(x) for x in pairs],'selected_on_validation':selected,'validation':valid,'test':{n:score(test,pred) for n,pred in preds.items()}})
+        density_edges=[]
+        if args.population:
+            density_edges=sorted(set(float(v) for v in tr.population_density_200m.quantile([.25,.5,.75])))
+            result['density_group']=np.searchsorted(density_edges,test.population_density_200m.to_numpy(),side='right')+1
+        selected=min(MODELS,key=lambda n:rank(valid[n]));reports.append({'fold':fold+1,'population_density_group_edges':density_edges,'train_target_end':str(tr.target_month.max().date()),'validation_target_start':str(val_start.date()),'validation_target_end':str(val.target_month.max().date()),'test_target_start':str(test_start.date()),'test_target_end':str(test_end.date()),'kde_bandwidth_m':bw,'training_selected_pairs':[list(x) for x in pairs],'selected_on_validation':selected,'validation':valid,'test':{n:score(test,pred) for n,pred in preds.items()}})
         print(f'Fold {fold+1} through {test_end.date()}: {len(test):,} held-out rows; validation selected {selected}, KDE {bw} m',flush=True)
     evaluated=pd.concat(all_preds,ignore_index=True)
-    aggregate={name:score(evaluated.rename(columns={'actual':'target'}),evaluated[name].to_numpy()) for name in MODELS}
+    aggregate={name:score(evaluated.rename(columns={'actual':'target'}),evaluated[name].to_numpy()) for name in models}
     # One extra horizon beyond this data snapshot, not a current real-time forecast.
     latest=panel[panel.target.isna()].copy();known=panel[panel.target.notna()]
     f=latest[['segment_id','month','target_month','target']].rename(columns={'target':'actual'}).copy();f['fold']=0;f['kind']='beyond_snapshot';f=f.assign(zero=0.,persistence=latest['count'],rolling=latest.mean_3,kde=latest[f'kde_alloc_{bw}'])
     for name,cols in fx.items():model=estimator(name);model.fit(known[cols],known.target);f[name]=model.predict(latest[cols])
     pd.concat([evaluated,f],ignore_index=True).to_csv(OUT/'predictions.csv',index=False)
     # Auditable baseline-vs-grid reproduction on a single sample month.
-    sample=e[e.in_study & (e.month==months[-1])];args=(sample[['x','y']].to_numpy(),sample.crime.tolist(),sample.month.tolist());slow=mine_patterns(*args,threshold=.1,method='baseline');fast=mine_patterns(*args,threshold=.1)
+    sample=e[e.in_study & (e.month==months[-1])];sample_args=(sample[['x','y']].to_numpy(),sample.crime.tolist(),sample.month.tolist());slow=mine_patterns(*sample_args,threshold=.1,method='baseline');fast=mine_patterns(*sample_args,threshold=.1)
     assert slow['patterns']==fast['patterns'],'Grid filtering changed the exact prevalent patterns'
-    summary={'study_id':audit['study_id'],'models':MODELS,'folds':reports,'aggregate':aggregate,'held_out_months':sorted(evaluated.target_month.dt.strftime('%Y-%m-01').unique()),'forecast_month':str(latest.target_month.max().date()),'default_model':reports[-1]['selected_on_validation'],'benchmark':{'month':months[-1],'baseline':slow['stats'],'grid':fast['stats'],'same_patterns':True},'interpretation':'MAE and RMSE are for matched records per segment-month. Top 10% capture uses expected tie handling. Models are evaluated on later months; training pattern selection uses only training-origin information. Current OSM places are not used to predict historical counts.'}
+    summary={'study_id':audit['study_id'],'models':models,'folds':reports,'aggregate':aggregate,'held_out_months':sorted(evaluated.target_month.dt.strftime('%Y-%m-01').unique()),'forecast_month':str(latest.target_month.max().date()),'default_model':reports[-1]['selected_on_validation'],'benchmark':{'month':months[-1],'baseline':slow['stats'],'grid':fast['stats'],'same_patterns':True},'interpretation':'MAE and RMSE are for matched records per segment-month. Top 10% capture uses expected tie handling. Models are evaluated on later months; training pattern selection uses only training-origin information. Current OSM places are not used to predict historical counts.'}
+    if args.population:
+        summary['population']=population_manifest
+        summary['population']['evaluation']='Retrospective association experiment; excluded from historical default-model selection.'
+        summary['population']['density_groups']={str(group):{name:score(rows.rename(columns={'actual':'target'}),rows[name].to_numpy()) for name in models} for group,rows in evaluated.groupby('density_group')}
+        summary['population']['paired_comparisons']={
+            'xgboost':'xgb_population vs xgb_kde (only added population inputs)',
+            'random_forest':'rf_population vs rf_kde (only added population inputs)'}
     (OUT/'metrics.json').write_text(json.dumps(summary,indent=2,allow_nan=False));print(json.dumps(aggregate,indent=2),flush=True)
 if __name__=='__main__':main()

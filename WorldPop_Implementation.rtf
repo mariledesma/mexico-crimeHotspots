@@ -1,0 +1,144 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww28600\viewh15240\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 Adding wocrldpop to Mexico City hospot project\
+\
+Using street boundaries and crime observations already prepped:\
+	so we expect these files in data/street/processed folder:\
+		segments.geoson (contains 877 street segments)\
+		audit.json (identifies the study boundary and source dates)\
+		events.csv (contains crime records)\
+		neighbors.csv (ident. Connected streets)\
+The use commands to reproduce pop addition using those saved inputs.\
+In vs code: cd Mexico-crime\
+Find pop data in World Pop Mexico catalog. In api documentation\
+The selected dataset is WorldPop Global2 R2025A (annual pop grid estimates on a grid space approximately 100m apart)\
+	The downloads are: Mexico catalog, API documetation, dataset citation\
+Used 2 api endpoints:\
+	GET https://api.worldpop.org/v3/countries/MEX/files?year=2023\
+		that retrieves the year\'92s Mexico file catalog and source info\
+	POST https://api.worldpop.org/v3/raster\
+		that requests a pop raster for our geographic  area\
+The request body follows this structure. The script calculates request_area from our street geometry \
+	payload = \{\
+		\'93geojson\'94: request_area,\
+		\'93year\'94: year,\
+		\'93resolution\'94: \'93100m\'94,\
+		\'93layer\'94: \'93population\'94,\
+	\}\
+The api returns a GeoTIFF, a geographic image whose pixels contains pop values\
+The install the raster-reading package\
+Add rasterio to the street analysis reqs. It reads the downloaded pop maps.\
+The existing packages handle tables, geometry, coordinate conversion, and model training.\
+To install everything required by this part of the project:\
+	street-analysis/.venv/bin/pip install -r street-analysis/requirements.txt\
+Use the street analysis\'92s own python environment so activation is optional when using these full executable paths.\
+Then run the population importer.\
+Write population.py\
+Run it with:\
+	street-analysis/.venv/bin/python street-analysis/population.py\
+		\'97start-year 2019 \\\
+		\'97end-year 2026\
+The script does these steps:\
+	reads our street geometries\
+	converts coordinates to EPSG:32614 where distances and areas can be calculated  in meters\
+	draws a 200 m buffer around each street segment\
+	requests pop rasters covering those buffers and the study boundary\
+	calculates the estimated pop inside each buffer\
+	saves annual pop features and source metadata\
+It downloads 2018-2026. 2018 helps us calculate the change from 2018 to 2019\
+The buffer construction is implemented with:\
+buffers = [\
+	line.buffer(200, quad_segs=16)\
+	for line in lines\
+]\
+A buffer extends 200 m around the full street geometry\
+When a pop cell partly overlaps a buffer, the script assigns the corresponding fraction of its pop\
+	population_contribution = (\
+		cell_population\
+		* overlap_area\
+		/ cell_area\
+	)\
+So if a cell contains an estimated 100 residents and half its area fall inside the buffer, it contributes 50 residents.\
+So pop is distributed uniformly within that individual cell.\
+The create the pop features.\
+For every street and year, the importer creates these values:\
+population_200m is estimated residents inside the street buffer\
+population_density_200m is estimated residents divided by buffer area in km^2\
+population_change_pct is percentage change from the previous year\
+buffer_area_km2 is area used for the calculation\
+The annual change is calculated with:\
+	change_pct = (\
+		current_population / previous_population - 1\
+	) * 100\
+The resulting table has 7,016 rows which is 877 streets * by 8 years.\
+The importer saves:\
+data/street/raw/worldpop/\
+    Downloaded GeoTIFFs and request metadata\
+\
+data/street/processed/population_features.csv\
+    Annual population features for each street\
+\
+data/street/processed/population.json\
+    Source information, checksums, settings, and study totals\
+Rerunning the importer reuses the cached files. It checks their hashes and verifies the dataset release, year, units, and grid resolutions.\
+The join pop to the monthly crime observations.\
+Update train.py to join the pop table using street ID and forecast-origin year.\
+	the relevant operation:\
+	panel.assign(\
+		population_year=panel.month.dt.year\
+	).merge(\
+		population,\
+		on=[\'93segment_id\'94, \'93population_year\'94],\
+		how=\'93left\'94,\
+		validate=\'93many_to_one\'94,\
+	)\
+So for example, a street\'92s March 2024 observation receives that street\'92s 2024 pop estimate. The annual estimate repeats across the months of that year.\
+The crime info still changes months, pop supplies annual context\
+The retrain and compare the models.\
+Run: street-analysis/.venv/bin/python street-analysis/train.py --population\
+The \'97population at the end adds three comparisons:\
+	random forest with neighbors and KDE\
+	random forest with neighbors, KDE, pop\
+	XGBoost with nieghbors, KDE, pop\
+The additional random forest + KDE model is a matching control for its pop variant\
+The models use the same 3 chronological test periods as before:\
+1 - March to August 2025\
+2 - Sept 2025 to Feb 2026\
+3 - March to Aug 2026\
+Each experiment trains on earlier observations and evals later observations.\
+Together the tests contain 15,786 street-month rows and 484 matched crime records\
+Also add eval by pop-density group. To see performance across areas with different densities.\
+The results of this were published to postgreSQL and the projects db connection configured:\
+	run: street-analysis/.venv/bin/python street-analysis/publish.py\
+The pop data goes into a new street_population table. The script also publishes updated model results.\
+These changes run within a db transaction.\
+Then, build and run the dashboard.\
+Add pop endpoint to street_api.py and update StreetApp.jsx\
+New endpoint:\
+	GET /api/street/population?year=2020\
+The dash uses it to display pop density around streets with a year selector and details for the selected street.\
+The page also shows annual pop estimates and evaluation results by density groups.\
+Build frontend:\
+	cd frontend\
+	nom run build\
+Start app:\
+	cd mexico-crime\
+	sh dashboard/start.sh\
+To verify:\
+Run an automated test:\
+	cd mexico-crime\
+	PYTHONPATH=street-analysis \\ \
+	street_analysis/.venv/bin/python -m unites discover \\\
+		-s street-analysis/tests\
+These include checks that partial-cell calculations conserve a pop counts and that mission pop data triggers an error.\
+While dash in running, in another terminal run:\
+	cd mexico-crime\
+	dashboard/.venv/bin/python street-analysis/check_api.py\
+That will check pop coverage, the added predictions, density-group counts, and existing dash funcs.\
+\
+}

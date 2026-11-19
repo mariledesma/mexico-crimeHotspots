@@ -57,3 +57,11 @@ dashboard/.venv/bin/python street-analysis/check_api.py
 ```
 
 Crime source: [HoyoDeCrimen](https://api.hoyodecrimen.com/) (CC BY 4.0). Streets and context: [© OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL).
+
+## WorldPop population context
+
+Annual WorldPop Global2 R2025A population is available for the street study for 2019–2026. Choose **Population density near streets** in the map to inspect 200 m street buffers. Annual study totals and evaluation results by density group appear below the map.
+
+Run `population.py`, then `train.py --population` and `publish.py` to include the three additional comparisons (Random Forest + KDE control, Random Forest + population, and XGBoost + population). The resulting 14-method experiment uses the original three chronological tests. Population variants are labeled retrospective because release inputs can postdate forecast origins. Population change is a demographic estimate and does not identify migration. INEGI small-area validation is pending.
+
+See [population results](POPULATION_RESULTS.md) for construction details, exact results, provenance and commands. Source snapshots and derived population features are stored with the ignored local street data. Raw files are cached so reruns reproduce the saved release.
